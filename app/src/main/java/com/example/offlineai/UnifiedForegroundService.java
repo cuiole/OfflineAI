@@ -584,9 +584,26 @@ public class UnifiedForegroundService extends Service {
         // 释放唤醒锁
         releaseWakeLock();
         
+        // Check if there are any active TTS tasks before stopping service
+        BackgroundTaskManager taskManager = BackgroundTaskManager.getInstance();
+        boolean hasTtsTask = taskManager.hasActiveTasksOfType(BackgroundTask.TaskType.TTS_GENERATION);
+        
+        if (hasTtsTask) {
+            LogManager.logI(TAG, "任务完成，但检测到 TTS 任务正在运行，保持服务运行");
+            // Update notification to show TTS is running
+            updateNotification("生成语音中", 0);
+            return; // Don't stop service yet
+        }
+        
         // 任务完成后，延迟停止服务，避免通知驻留
         LogManager.logI(TAG, "任务完成，1秒后停止服务并清除通知");
         new android.os.Handler(getMainLooper()).postDelayed(() -> {
+            // Double-check TTS tasks before actually stopping
+            boolean stillHasTtsTask = taskManager.hasActiveTasksOfType(BackgroundTask.TaskType.TTS_GENERATION);
+            if (stillHasTtsTask) {
+                LogManager.logI(TAG, "检测到 TTS 任务仍在运行，取消停止服务");
+                return;
+            }
             stopSelf();
             LogManager.logI(TAG, "服务已停止，通知已清除");
         }, 1000); // 延迟1秒，确保回调完成

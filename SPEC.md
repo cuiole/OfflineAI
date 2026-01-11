@@ -160,7 +160,21 @@ flowchart TB
     - `0`：Stable Diffusion 1.5 / chilloutmix（CLIP tokenizer，CFG + PNDM/PLMS）。
     - `1`：Taiyi Stable Diffusion Chinese（BERT tokenizer，CFG + PNDM/PLMS）。
     - `2`：ZImage（FlowMatch Euler；依赖 `MNN_BUILD_LLM=ON`；text encoder 输入 `input_ids` + `attention_mask`；latent 形状 `[1,16,128,128]`；无 CFG；timestep 为 float，使用 `t = 1 - sigma`）。
-    - **识别约定（OfflineAI）**：当模型目录 `config.json` 中 `model_type` 为 `zimage_diffusion_mnn` 时，Java 层创建 Diffusion session 会传 `modelType=2`；否则兜底按 `modelType=0`（SD1.5）。
+    - `3`：LongCat Image Edit（FlowMatch Euler；支持图片编辑；LLM-based text encoder；支持 T2I 和 Image Edit 两种模式；VAE encoder/decoder；latent packing/unpacking）。
+    - **识别约定（OfflineAI）**：
+      - `model_type` 为 `longcat_image_edit_mnn`：Java 层传 `modelType=3`（LongCat Image Edit）。
+      - `model_type` 为 `zimage_diffusion_mnn`：Java 层传 `modelType=2`（ZImage）。
+      - 其他情况：兜底按 `modelType=0`（SD1.5）。
+    - **LongCat Image Edit 图片编辑支持（2025-01-07）**：
+      - **模式自动判断**：
+        - **T2I 模式**：无图片输入时，`inputImagePath` 为空字符串，纯文本生成图片。
+        - **Image Edit 模式**：有图片输入时，传递图片路径到 `inputImagePath`，基于输入图片进行编辑。
+      - **图片传递逻辑**：
+        - Java 层：`inferenceWithConversationHistory` 检查 `imagePaths` 列表，如果非空则取第一张图片路径传递给 `inferenceDiffusion`。
+        - JNI 层：调用 `MnnInference.generateImageWithInput(handle, prompt, outputPath, steps, seed, cfg, inputImagePath, callback)`。
+        - C++ 层：调用 `diffusion->run(prompt, outputPath, iterNum, seed, cfg, callback, inputImagePath)`，MNN 引擎根据 `inputImagePath` 是否为空自动切换 T2I/Edit 模式。
+      - **通用设计**：不区分模型类型，所有 Diffusion 模型（SD1.5/ZImage/LongCat）都支持图片输入参数，有图片传路径，无图片传空字符串，由 MNN 引擎内部处理。
+      - **VAE on CPU 控制**：当前写死为 `false`（不启用），后续可根据需求通过 RuntimeConfig 配置。
     - **ZImage 图片尺寸配置（OfflineAI，2025-12-26 扩展支持非正方形比例）**：
       - **配置键**：
         - 旧版（正方形）：`ConfigManager.KEY_DIFFUSION_IMAGE_SIZE` / `RuntimeConfig.diffusionImageSize`（保留兼容）。

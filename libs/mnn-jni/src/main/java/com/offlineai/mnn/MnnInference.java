@@ -640,6 +640,29 @@ public class MnnInference {
     );
     
     /**
+     * Generate image from text prompt with optional input image (for image editing)
+     * @param diffusionHandle Diffusion handle returned by createDiffusion
+     * @param prompt Text prompt describing the image to generate
+     * @param outputPath Output image file path (e.g., /sdcard/output.jpg)
+     * @param iterNum Number of denoising iterations (recommended: 10-20)
+     * @param randomSeed Random seed for reproducibility (use -1 for random)
+     * @param cfgScale CFG (Classifier-Free Guidance) scale (0.0-10.0, default 1.0 for ZImage, 7.5 for SD1.5)
+     * @param inputImagePath Input image path for image editing (empty string for T2I mode)
+     * @param callback Progress callback (receives progress percentage 0-100)
+     * @return true if generation succeeded, false otherwise
+     */
+    public static native boolean generateImageWithInput(
+        long diffusionHandle, 
+        String prompt, 
+        String outputPath, 
+        int iterNum, 
+        int randomSeed,
+        float cfgScale,
+        String inputImagePath,
+        DiffusionCallback callback
+    );
+    
+    /**
      * Release diffusion session and free resources
      * @param diffusionHandle Diffusion handle
      */

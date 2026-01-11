@@ -3873,10 +3873,10 @@ Java_com_offlineai_mnn_MnnInference_generateImage(
             LOGI("[DIFFUSION] Memory stats: initialRSS=%.1fMB, peakRSS=%.1fMB, delta=%.1fMB", 
                  initialRssKB / 1024.0, peakRssKB / 1024.0, inferenceMemDeltaKB / 1024.0);
             
-            // Send completion info to UI - close debug section first
+            // Send completion info to UI
             if (onTokenMethod) {
                 char buf[512];
-                snprintf(buf, sizeof(buf), "\nCompleted (%.1fs)\n</debug>", duration / 1000.0);
+                snprintf(buf, sizeof(buf), "\nCompleted (%.1fs)", duration / 1000.0);
                 jstring jmsg = env->NewStringUTF(buf);
                 env->CallBooleanMethod(callback, onTokenMethod, jmsg);
                 env->DeleteLocalRef(jmsg);
@@ -3895,7 +3895,7 @@ Java_com_offlineai_mnn_MnnInference_generateImage(
             LOGE("[DIFF_DEBUG] FAILED");
             
             if (onTokenMethod) {
-                jstring jmsg = env->NewStringUTF("\nGeneration failed\n</debug>");
+                jstring jmsg = env->NewStringUTF("\nGeneration failed");
                 env->CallBooleanMethod(callback, onTokenMethod, jmsg);
                 env->DeleteLocalRef(jmsg);
             }
@@ -3906,12 +3906,12 @@ Java_com_offlineai_mnn_MnnInference_generateImage(
     } catch (const std::exception& e) {
         LOGE("[DIFFUSION] Failed to generate image: %s", e.what());
         
-        // Close debug tag on exception
+        // Send exception info to UI
         jclass callbackClass = env->GetObjectClass(callback);
         jmethodID onTokenMethod = env->GetMethodID(callbackClass, "onToken", "(Ljava/lang/String;)Z");
         if (onTokenMethod) {
             char buf[256];
-            snprintf(buf, sizeof(buf), "\nException: %s\n</debug>", e.what());
+            snprintf(buf, sizeof(buf), "\nException: %s", e.what());
             jstring jmsg = env->NewStringUTF(buf);
             env->CallBooleanMethod(callback, onTokenMethod, jmsg);
             env->DeleteLocalRef(jmsg);
@@ -3920,11 +3920,393 @@ Java_com_offlineai_mnn_MnnInference_generateImage(
     } catch (...) {
         LOGE("[DIFFUSION] Failed to generate image: unknown error");
         
-        // Close debug tag on exception
+        // Send error info to UI
         jclass callbackClass = env->GetObjectClass(callback);
         jmethodID onTokenMethod = env->GetMethodID(callbackClass, "onToken", "(Ljava/lang/String;)Z");
         if (onTokenMethod) {
-            jstring jmsg = env->NewStringUTF("\nUnknown error\n</debug>");
+            jstring jmsg = env->NewStringUTF("\nUnknown error");
+            env->CallBooleanMethod(callback, onTokenMethod, jmsg);
+            env->DeleteLocalRef(jmsg);
+        }
+        return JNI_FALSE;
+    }
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_offlineai_mnn_MnnInference_generateImageWithInput(
+    JNIEnv* env, jclass clazz,
+    jlong handle, jstring jPrompt, jstring jOutputPath, 
+    jint iterNum, jint randomSeed, jfloat cfgScale, jstring jInputImagePath, jobject callback) {
+    
+    try {
+        // Get diffusion instance and memory mode
+        Diffusion* diffusion = nullptr;
+        int memoryMode = 0;
+        {
+            std::lock_guard<std::mutex> lock(g_diffusion_sessions_mutex);
+            auto it = g_diffusion_sessions.find(handle);
+            if (it == g_diffusion_sessions.end()) {
+                LOGE("[DIFFUSION] Invalid diffusion handle: %lld", (long long)handle);
+                return JNI_FALSE;
+            }
+            diffusion = it->second.get();
+            
+            auto memIt = g_diffusion_memory_modes.find(handle);
+            if (memIt != g_diffusion_memory_modes.end()) {
+                memoryMode = memIt->second;
+            }
+        }
+        
+        // Get strings
+        const char* prompt = env->GetStringUTFChars(jPrompt, nullptr);
+        const char* outputPath = env->GetStringUTFChars(jOutputPath, nullptr);
+        const char* inputImagePath = jInputImagePath ? env->GetStringUTFChars(jInputImagePath, nullptr) : "";
+        
+        // Determine mode based on input image
+        std::string inputImageStr = inputImagePath ? std::string(inputImagePath) : "";
+        bool isEditMode = !inputImageStr.empty();
+        const char* modeStr = isEditMode ? "Edit" : "T2I";
+        
+        LOGI("[DIFFUSION] Generating image (%s mode): prompt='%s', output='%s', input='%s', iter=%d, seed=%d, cfg=%.2f, memoryMode=%d",
+             modeStr, prompt, outputPath, inputImageStr.c_str(), iterNum, randomSeed, cfgScale, memoryMode);
+        
+        // Get callback class and methods
+        jclass callbackClass = env->GetObjectClass(callback);
+        jmethodID onProgressMethod = env->GetMethodID(callbackClass, "onProgress", "(I)Z");
+        jmethodID onTokenMethod = env->GetMethodID(callbackClass, "onToken", "(Ljava/lang/String;)Z");
+        
+        // Track first run per session
+        bool is_first = false;
+        {
+            std::lock_guard<std::mutex> lock(g_diffusion_sessions_mutex);
+            auto it = g_diffusion_first_run.find(handle);
+            if (it != g_diffusion_first_run.end() && it->second) {
+                is_first = true;
+                g_diffusion_first_run[handle] = false;
+            }
+        }
+        
+        // Print model info and mode
+        if (onTokenMethod) {
+            char cwd[1024];
+            getcwd(cwd, sizeof(cwd));
+            std::string cwdStr(cwd);
+            size_t lastSlash = cwdStr.find_last_of('/');
+            if (lastSlash != std::string::npos) {
+                cwdStr = cwdStr.substr(0, lastSlash);
+                lastSlash = cwdStr.find_last_of('/');
+                if (lastSlash != std::string::npos) {
+                    std::string modelName = cwdStr.substr(lastSlash + 1);
+                    char buf[512];
+                    snprintf(buf, sizeof(buf), "\nModel: %s (%s mode)", modelName.c_str(), modeStr);
+                    jstring jmsg = env->NewStringUTF(buf);
+                    env->CallBooleanMethod(callback, onTokenMethod, jmsg);
+                    env->DeleteLocalRef(jmsg);
+                }
+            }
+            
+            // Print GPU settings
+            {
+                std::lock_guard<std::mutex> lock(g_diffusion_sessions_mutex);
+                auto it = g_diffusion_params.find(handle);
+                if (it != g_diffusion_params.end()) {
+                    const char* gpuMemModeStr = (it->second.gpuMemoryMode == 2) ? "IMAGE" : "BUFFER";
+                    const char* precisionStr = "AUTO";
+                    switch (it->second.precisionMode) {
+                        case 1: precisionStr = "LOW(FP16)"; break;
+                        case 2: precisionStr = "NORMAL"; break;
+                        case 3: precisionStr = "HIGH(FP32)"; break;
+                    }
+                    char buf[256];
+                    snprintf(buf, sizeof(buf), "\nGPU: MemMode=%s, Precision=%s", gpuMemModeStr, precisionStr);
+                    jstring jmsg = env->NewStringUTF(buf);
+                    env->CallBooleanMethod(callback, onTokenMethod, jmsg);
+                    env->DeleteLocalRef(jmsg);
+                }
+            }
+        }
+        
+        // Check GPU cache status (reuse existing logic)
+        if (onTokenMethod) {
+            struct stat buffer;
+            bool cacheExists = (stat(".tempcache", &buffer) == 0);
+            
+            char buf[512];
+            if (cacheExists) {
+                long cacheSize = buffer.st_size / 1024;
+                snprintf(buf, sizeof(buf), "\nGPU Kernel Cache: EXISTS (%ld KB)", cacheSize);
+            } else {
+                snprintf(buf, sizeof(buf), "\nGPU Kernel Cache: None");
+            }
+            jstring jmsg = env->NewStringUTF(buf);
+            env->CallBooleanMethod(callback, onTokenMethod, jmsg);
+            env->DeleteLocalRef(jmsg);
+        }
+        
+        // Model reload logic (same as original generateImage)
+        if (is_first && onTokenMethod) {
+            jstring jmsg = env->NewStringUTF("\nModels loaded successfully!");
+            env->CallBooleanMethod(callback, onTokenMethod, jmsg);
+            env->DeleteLocalRef(jmsg);
+        } else {
+            if (memoryMode != 1) {
+                const char* modeStrMem = (memoryMode == 0) ? "Low" : "Balance";
+                struct stat buffer;
+                bool cacheExists = (stat(".tempcache", &buffer) == 0);
+                
+                if (!cacheExists) {
+                    if (onTokenMethod) {
+                        char buf[256];
+                        snprintf(buf, sizeof(buf), "\nNo kernel cache detected, saving for next run (Memory: %s)...", modeStrMem);
+                        jstring jmsg = env->NewStringUTF(buf);
+                        env->CallBooleanMethod(callback, onTokenMethod, jmsg);
+                        env->DeleteLocalRef(jmsg);
+                    }
+                    
+                    DiffusionParams params;
+                    {
+                        std::lock_guard<std::mutex> lock(g_diffusion_sessions_mutex);
+                        auto paramIt = g_diffusion_params.find(handle);
+                        if (paramIt != g_diffusion_params.end()) {
+                            params = paramIt->second;
+                        }
+                    }
+                    
+                    {
+                        std::lock_guard<std::mutex> lock(g_diffusion_sessions_mutex);
+                        g_diffusion_sessions.erase(handle);
+                        g_diffusion_memory_modes.erase(handle);
+                        g_diffusion_params.erase(handle);
+                        g_diffusion_first_run.erase(handle);
+                    }
+                    
+                    usleep(100000);
+                    
+                    if (onTokenMethod) {
+                        jstring jmsg = env->NewStringUTF("\nReloading models...");
+                        env->CallBooleanMethod(callback, onTokenMethod, jmsg);
+                        env->DeleteLocalRef(jmsg);
+                    }
+                    
+                    auto new_diffusion = std::make_unique<Diffusion>(
+                        params.modelPath,
+                        params.modelType,
+                        params.backendType,
+                        params.memoryMode,
+                        params.imageSize,
+                        params.textEncoderOnCPU,
+                        static_cast<DiffusionGpuMemoryMode>(params.gpuMemoryMode),
+                        static_cast<DiffusionPrecisionMode>(params.precisionMode),
+                        params.numThreads
+                    );
+                    new_diffusion->load();
+                    
+                    {
+                        std::lock_guard<std::mutex> lock(g_diffusion_sessions_mutex);
+                        g_diffusion_sessions[handle] = std::move(new_diffusion);
+                        g_diffusion_memory_modes[handle] = memoryMode;
+                        g_diffusion_params[handle] = params;
+                        g_diffusion_first_run[handle] = false;
+                        diffusion = g_diffusion_sessions[handle].get();
+                    }
+                    
+                    if (onTokenMethod) {
+                        jstring jmsg = env->NewStringUTF("\nModels reloaded (cache will be faster next time)!");
+                        env->CallBooleanMethod(callback, onTokenMethod, jmsg);
+                        env->DeleteLocalRef(jmsg);
+                    }
+                } else {
+                    if (onTokenMethod) {
+                        char buf[256];
+                        long cacheSize = buffer.st_size / 1024;
+                        snprintf(buf, sizeof(buf), "\nReloading models (Cache: %ld KB, Memory: %s)...", cacheSize, modeStrMem);
+                        jstring jmsg = env->NewStringUTF(buf);
+                        env->CallBooleanMethod(callback, onTokenMethod, jmsg);
+                        env->DeleteLocalRef(jmsg);
+                    }
+                    
+                    diffusion->load();
+                    
+                    if (onTokenMethod) {
+                        jstring jmsg = env->NewStringUTF("\nModels reloaded (fast with cache)!");
+                        env->CallBooleanMethod(callback, onTokenMethod, jmsg);
+                        env->DeleteLocalRef(jmsg);
+                    }
+                }
+            } else {
+                if (onTokenMethod) {
+                    jstring jmsg = env->NewStringUTF("\nStatus: Ready (Memory: Enough, models cached)");
+                    env->CallBooleanMethod(callback, onTokenMethod, jmsg);
+                    env->DeleteLocalRef(jmsg);
+                }
+            }
+        }
+        
+        // Print preparation info
+        if (onTokenMethod) {
+            char buf[512];
+            DiffusionModelType modelType = STABLE_DIFFUSION_1_5;
+            {
+                std::lock_guard<std::mutex> lock(g_diffusion_sessions_mutex);
+                auto it = g_diffusion_params.find(handle);
+                if (it != g_diffusion_params.end()) {
+                    modelType = it->second.modelType;
+                }
+            }
+            
+            const char* schedulerName = (modelType == STABLE_DIFFUSION_ZIMAGE || modelType == LONGCAT_IMAGE_EDIT) ? "FlowMatch-Euler" : "PLMS";
+            snprintf(buf, sizeof(buf), "\nPreparing: Steps=%d, CFG=%.2f, Scheduler=%s, Seed=%s", 
+                     iterNum, cfgScale, schedulerName, 
+                     randomSeed < 0 ? "Random" : std::to_string(randomSeed).c_str());
+            jstring jmsg = env->NewStringUTF(buf);
+            env->CallBooleanMethod(callback, onTokenMethod, jmsg);
+            env->DeleteLocalRef(jmsg);
+        }
+        
+        // Progress tracking
+        int total_steps = iterNum;
+        int last_step = 0;
+        bool unet_started = false;
+        bool text_encoder_printed = false;
+        long peakRssKB = getCurrentRssKB();
+        long initialRssKB = peakRssKB;
+        
+        std::function<void(int)> progressCallback = [env, callback, onProgressMethod, onTokenMethod, total_steps, &last_step, &unet_started, &text_encoder_printed, &peakRssKB](int progress) {
+            long currentRss = getCurrentRssKB();
+            if (currentRss > peakRssKB) {
+                peakRssKB = currentRss;
+            }
+            
+            if (onTokenMethod) {
+                char buf[256];
+                
+                if (progress >= 10 && !unet_started) {
+                    snprintf(buf, sizeof(buf), "\nText Encoder: done\nUNet Steps(%d): ", total_steps);
+                    last_step = 0;
+                    unet_started = true;
+                    text_encoder_printed = true;
+                }
+                else if (progress >= 10 && progress < 95 && unet_started) {
+                    int current_step = ((progress - 10) * total_steps) / 85 + 1;
+                    if (current_step > last_step && current_step <= total_steps) {
+                        snprintf(buf, sizeof(buf), "%d..", current_step);
+                        last_step = current_step;
+                        if (current_step == total_steps) {
+                            snprintf(buf, sizeof(buf), "%d\nUNet: done\nVAE Decoder: generating...", total_steps);
+                            unet_started = false;
+                        }
+                    } else {
+                        buf[0] = '\0';
+                    }
+                }
+                else if (progress >= 95 && progress < 100) {
+                    if (unet_started) {
+                        snprintf(buf, sizeof(buf), "%d\nUNet: done\nVAE Decoder: generating...", total_steps);
+                        unet_started = false;
+                    } else {
+                        buf[0] = '\0';
+                    }
+                }
+                else if (progress == 100) {
+                    snprintf(buf, sizeof(buf), "\nVAE Decoder: done");
+                }
+                else {
+                    buf[0] = '\0';
+                }
+                
+                if (buf[0] != '\0') {
+                    jstring jmsg = env->NewStringUTF(buf);
+                    env->CallBooleanMethod(callback, onTokenMethod, jmsg);
+                    env->DeleteLocalRef(jmsg);
+                }
+            }
+            
+            if (onProgressMethod) {
+                env->CallBooleanMethod(callback, onProgressMethod, progress);
+            }
+        };
+        
+        // Run diffusion with input image path
+        auto start = std::chrono::high_resolution_clock::now();
+        bool success = diffusion->run(
+            std::string(prompt),
+            std::string(outputPath),
+            iterNum,
+            randomSeed,
+            cfgScale,
+            progressCallback,
+            inputImageStr  // Pass input image path (empty for T2I, path for Edit)
+        );
+        
+        auto end = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+        
+        // Release strings
+        env->ReleaseStringUTFChars(jPrompt, prompt);
+        env->ReleaseStringUTFChars(jOutputPath, outputPath);
+        if (jInputImagePath) {
+            env->ReleaseStringUTFChars(jInputImagePath, inputImagePath);
+        }
+        
+        if (success) {
+            LOGI("[DIFFUSION] Image generated successfully in %lld ms (%s mode)", (long long)duration, modeStr);
+            
+            long finalRssKB = getCurrentRssKB();
+            if (finalRssKB > peakRssKB) {
+                peakRssKB = finalRssKB;
+            }
+            
+            long inferenceMemDeltaKB = peakRssKB - initialRssKB;
+            LOGI("[DIFFUSION] Memory stats: initialRSS=%.1fMB, peakRSS=%.1fMB, delta=%.1fMB", 
+                 initialRssKB / 1024.0, peakRssKB / 1024.0, inferenceMemDeltaKB / 1024.0);
+            
+            if (onTokenMethod) {
+                char buf[512];
+                snprintf(buf, sizeof(buf), "\nCompleted (%.1fs)", duration / 1000.0);
+                jstring jmsg = env->NewStringUTF(buf);
+                env->CallBooleanMethod(callback, onTokenMethod, jmsg);
+                env->DeleteLocalRef(jmsg);
+                
+                if (peakRssKB > 0) {
+                    snprintf(buf, sizeof(buf), "[MEMORY_STATS:peak=%.1f,rss=%.1f]", 
+                             peakRssKB / 1024.0, finalRssKB / 1024.0);
+                    jmsg = env->NewStringUTF(buf);
+                    env->CallBooleanMethod(callback, onTokenMethod, jmsg);
+                    env->DeleteLocalRef(jmsg);
+                }
+            }
+        } else {
+            LOGE("[DIFFUSION] Image generation failed (%s mode)", modeStr);
+            
+            if (onTokenMethod) {
+                jstring jmsg = env->NewStringUTF("\nGeneration failed");
+                env->CallBooleanMethod(callback, onTokenMethod, jmsg);
+                env->DeleteLocalRef(jmsg);
+            }
+        }
+        
+        return success ? JNI_TRUE : JNI_FALSE;
+        
+    } catch (const std::exception& e) {
+        LOGE("[DIFFUSION] Failed to generate image: %s", e.what());
+        
+        jclass callbackClass = env->GetObjectClass(callback);
+        jmethodID onTokenMethod = env->GetMethodID(callbackClass, "onToken", "(Ljava/lang/String;)Z");
+        if (onTokenMethod) {
+            char buf[256];
+            snprintf(buf, sizeof(buf), "\nException: %s", e.what());
+            jstring jmsg = env->NewStringUTF(buf);
+            env->CallBooleanMethod(callback, onTokenMethod, jmsg);
+            env->DeleteLocalRef(jmsg);
+        }
+        return JNI_FALSE;
+    } catch (...) {
+        LOGE("[DIFFUSION] Failed to generate image: unknown error");
+        
+        jclass callbackClass = env->GetObjectClass(callback);
+        jmethodID onTokenMethod = env->GetMethodID(callbackClass, "onToken", "(Ljava/lang/String;)Z");
+        if (onTokenMethod) {
+            jstring jmsg = env->NewStringUTF("\nUnknown error");
             env->CallBooleanMethod(callback, onTokenMethod, jmsg);
             env->DeleteLocalRef(jmsg);
         }
