@@ -66,6 +66,9 @@ public final class RuntimeConfigUtil {
         config.ttsModel = ConfigManager.getString(appCtx, ConfigManager.KEY_TTS_MODEL, ConfigManager.DEFAULT_TTS_MODEL);
         config.ttsDitSteps = ConfigManager.getTtsDitSteps(appCtx);
 
+        // VL (Vision-Language) settings
+        config.imagePreprocessSize = ConfigManager.getImagePreprocessSize(appCtx);
+
         // Model base paths
         config.llmModelBasePath = ConfigManager.getModelPath(appCtx);
         config.asrModelBasePath = ConfigManager.getAsrModelPath(appCtx);

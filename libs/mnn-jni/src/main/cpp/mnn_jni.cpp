@@ -479,17 +479,60 @@ public:
             MNN::Express::ExecutorScope scope(executor);
             LOGI("✅ MNN Executor and ExecutorScope created with forwardType=%d", (int)forwardType);
             
-            // Create LLM instance from model directory
-            // CRITICAL: Pass directory path, NOT config.json path (like ChatMNN Line 109)
-            // LlmConfig will auto-load config.json and llm_config.json from the directory
-            // IMPORTANT: Directory path MUST end with "/" for MNN to correctly append filenames
+            // CRITICAL FIX: Merge runtime config into model config.json BEFORE createLLM()
+            // Reason: Omni::Omni() reads image_size in constructor, before set_config() is called
+            // Solution: Create a merged config and pass it to createLLM()
             std::string model_dir_with_slash = model_dir_;
             if (!model_dir_with_slash.empty() && model_dir_with_slash.back() != '/') {
                 model_dir_with_slash += "/";
             }
-            LOGI("Creating LLM instance from directory: %s", model_dir_with_slash.c_str());
             
-            llm_ = Llm::createLLM(model_dir_with_slash);
+            std::string config_path_for_llm = model_dir_with_slash;
+            
+            // If we have runtime config, merge it with model config.json
+            if (!config_json_.empty()) {
+                try {
+                    // Read model's config.json
+                    std::string model_config_path = model_dir_with_slash + "config.json";
+                    std::ifstream model_config_file(model_config_path);
+                    json merged_config;
+                    
+                    if (model_config_file.is_open()) {
+                        model_config_file >> merged_config;
+                        model_config_file.close();
+                        LOGI("Loaded model config.json");
+                    } else {
+                        merged_config = json::object();
+                        LOGW("Model config.json not found, using empty config");
+                    }
+                    
+                    // Parse runtime config
+                    json runtime_config = json::parse(config_json_);
+                    
+                    // Merge runtime config into model config (runtime takes precedence)
+                    for (auto& [key, value] : runtime_config.items()) {
+                        merged_config[key] = value;
+                    }
+                    
+                    // Save merged config to temporary file
+                    std::string temp_config_path = model_dir_with_slash + "config_runtime_merged.json";
+                    std::ofstream temp_config_file(temp_config_path);
+                    if (temp_config_file.is_open()) {
+                        temp_config_file << merged_config.dump(2);
+                        temp_config_file.close();
+                        config_path_for_llm = temp_config_path;
+                        LOGI("Saved merged config to: %s", temp_config_path.c_str());
+                        LOGI("Merged config contains image_size: %d", merged_config.value("image_size", -1));
+                    } else {
+                        LOGW("Failed to save merged config, using model directory");
+                    }
+                } catch (const std::exception& e) {
+                    LOGW("Failed to merge configs: %s, using model directory", e.what());
+                }
+            }
+            
+            LOGI("Creating LLM instance from: %s", config_path_for_llm.c_str());
+            llm_ = Llm::createLLM(config_path_for_llm);
             
             if (!llm_) {
                 LOGE("Failed to create LLM instance");
@@ -497,14 +540,6 @@ public:
             }
             
             LOGI("LLM instance created successfully");
-            
-            // Set runtime config BEFORE load() for other parameters (temp, top_p, etc.)
-            // Note: Backend is already set via ExecutorScope above
-            if (!config_json_.empty()) {
-                LOGI("Setting runtime config (temperature, top_p, etc.)...");
-                llm_->set_config(config_json_);
-                LOGI("Runtime config applied successfully");
-            }
             
             // Load model (this will use the runtime config set above)
             LOGI("About to load MNN model from: %s", model_dir_.c_str());

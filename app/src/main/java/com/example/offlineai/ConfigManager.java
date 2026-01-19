@@ -273,22 +273,24 @@ public class ConfigManager {
     public static final int DEFAULT_LLAMACPP_EMBEDDING_BATCH_SIZE = 32;
     public static final boolean DEFAULT_USE_LLAMACPP = false;
     
-    // Image preprocessing size presets (all multiples of 28 for VL models)
-    public static final int IMAGE_SIZE_MIN = 112;      // 28×4, ~16 tokens
-    public static final int IMAGE_SIZE_SMALL = 280;    // 28×10, ~100 tokens
-    public static final int IMAGE_SIZE_MEDIUM = 392;   // 28×14, ~196 tokens
-    public static final int IMAGE_SIZE_DEFAULT = 504;  // 28×18, ~324 tokens (recommended)
-    public static final int IMAGE_SIZE_LARGE = 672;    // 28×24, ~576 tokens
-    public static final int IMAGE_SIZE_XLARGE = 896;   // 28×32, ~1024 tokens
-    public static final int IMAGE_SIZE_MAX_RESIZE = 1008; // 28×36, ~1296 tokens
-    public static final int IMAGE_SIZE_ORIGINAL = 0;   // No resize (MAX mode)
+    // Image preprocessing size presets for VL models (controlled by MNN API)
+    // Range: 420-800, aligned to multiples of 28 for optimal VL model performance
+    public static final int IMAGE_SIZE_420 = 420;      // 28×15, ~225 tokens
+    public static final int IMAGE_SIZE_504 = 504;      // 28×18, ~324 tokens
+    public static final int IMAGE_SIZE_560 = 560;      // 28×20, ~400 tokens
+    public static final int IMAGE_SIZE_616 = 616;      // 28×22, ~484 tokens
+    public static final int IMAGE_SIZE_672 = 672;      // 28×24, ~576 tokens
+    public static final int IMAGE_SIZE_728 = 728;      // 28×26, ~676 tokens
+    public static final int IMAGE_SIZE_784 = 784;      // 28×28, ~784 tokens
+    public static final int IMAGE_SIZE_800 = 800;      // 28×28.57, ~814 tokens (max manual)
+    public static final int IMAGE_SIZE_AUTO = 0;       // Auto mode: use model's llm_config.json image_size (default 448)
     
     // 手动推理参数默认值
     public static final float DEFAULT_MANUAL_TEMPERATURE = 0.8f;
     public static final float DEFAULT_MANUAL_TOP_P = 0.95f;
     public static final int DEFAULT_MANUAL_TOP_K = 40;
     public static final float DEFAULT_MANUAL_REPEAT_PENALTY = 1.1f;
-    public static final int DEFAULT_IMAGE_PREPROCESS_SIZE = IMAGE_SIZE_ORIGINAL; // 图片预处理尺寸默认值（0=MAX模式，让MNN自己处理）
+    public static final int DEFAULT_IMAGE_PREPROCESS_SIZE = IMAGE_SIZE_AUTO; // 图片预处理尺寸默认值（0=Auto模式，使用模型 llm_config.json 的 image_size，默认 448）
     public static final int DEFAULT_HISTORY_ROUNDS = 5; // 默认保留5轮对话历史
     public static final boolean DEFAULT_DEBUG_MODE = false; // 默认关闭调试模式
     public static final boolean DEFAULT_PRIORITY_MANUAL_PARAMS = false; // 默认不优先使用手动参数

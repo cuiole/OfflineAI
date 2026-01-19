@@ -428,6 +428,17 @@ public class MnnInference {
             return this;
         }
         
+        /**
+         * Set image size for VL models (vision-language models)
+         * @param size Image size in pixels (e.g., 420, 504, 672, 800)
+         *             0 = Auto mode (use model's llm_config.json image_size, default 448)
+         * @return ConfigBuilder for chaining
+         */
+        public ConfigBuilder imageSize(int size) {
+            addField("image_size", size);
+            return this;
+        }
+        
         private void addField(String key, String value) {
             if (!first) json.append(",");
             json.append("\"").append(key).append("\":\"").append(value).append("\"");

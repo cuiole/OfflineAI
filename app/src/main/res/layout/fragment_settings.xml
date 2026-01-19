@@ -927,8 +927,8 @@
                 android:layout_weight="1"
                 android:layout_marginStart="0dp"
                 android:layout_marginEnd="0dp"
-                android:max="7"
-                android:progress="3" />
+                android:max="8"
+                android:progress="8" />
 
             <TextView
                 android:id="@+id/textViewImagePreprocessSizeValue"

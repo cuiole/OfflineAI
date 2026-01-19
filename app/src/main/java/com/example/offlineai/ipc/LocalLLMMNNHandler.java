@@ -1559,6 +1559,29 @@ public class LocalLLMMNNHandler implements LocalLlmHandler.InferenceEngine {
         File cacheDir = context.getCacheDir();
         builder.tmpPath(cacheDir.getAbsolutePath());
 
+        // VL (Vision-Language) image size configuration
+        // 0 = Auto mode: use model's llm_config.json image_size (default 448)
+        // Other values (420-800): override model's image_size
+        RuntimeConfig runtimeCfg = RuntimeConfigHolder.get();
+        LogManager.logI(TAG, "[DEBUG] RuntimeConfig is null: " + (runtimeCfg == null));
+        if (runtimeCfg != null) {
+            LogManager.logI(TAG, "[DEBUG] RuntimeConfig.imagePreprocessSize = " + runtimeCfg.imagePreprocessSize);
+        }
+        LogManager.logI(TAG, "[DEBUG] DEFAULT_IMAGE_PREPROCESS_SIZE = " + ConfigManager.DEFAULT_IMAGE_PREPROCESS_SIZE);
+        
+        int imageSize = RuntimeConfigHolder.getImagePreprocessSizeOrDefault(ConfigManager.DEFAULT_IMAGE_PREPROCESS_SIZE);
+        LogManager.logI(TAG, "[DEBUG] Final imageSize from RuntimeConfigHolder = " + imageSize);
+        LogManager.logI(TAG, "[DEBUG] IMAGE_SIZE_AUTO = " + ConfigManager.IMAGE_SIZE_AUTO);
+        
+        if (imageSize != ConfigManager.IMAGE_SIZE_AUTO) {
+            // Manual mode: override model's image_size
+            builder.imageSize(imageSize);
+            LogManager.logI(TAG, "🖼️ VL image size: " + imageSize + " (manual override)");
+        } else {
+            // Auto mode: use model's llm_config.json image_size (default 448)
+            LogManager.logI(TAG, "🖼️ VL image size: Auto (use model's llm_config.json, default 448)");
+        }
+
         // Parameter priority logic:
         // 1. If priorityManual=true (手动参数优先): use manual params from RuntimeConfig
         // 2. If priorityManual=false (非手动参数优先): do NOT set params, let MNN read model config.json
@@ -1598,6 +1621,10 @@ public class LocalLLMMNNHandler implements LocalLlmHandler.InferenceEngine {
                     "Built MNN config - Backend: %s, Threads: %d, MaxAllTokens: %d, MaxNewTokens: %d, Chunk: %d, KVLimit: %s, SamplingParams: model_default",
                     mnnBackend, threads, maxSeqLength, maxNewTokens, CHUNK_SIZE, kvLimitStr));
         }
+
+        LogManager.logI(TAG, "[DEBUG] ========== Final MNN Config JSON ==========");
+        LogManager.logI(TAG, "[DEBUG] " + config);
+        LogManager.logI(TAG, "[DEBUG] ==========================================");
 
         return config;
     }
