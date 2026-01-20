@@ -70,6 +70,7 @@ import com.example.offlineai.ipc.LocalLlmAdapter;
 import com.example.offlineai.ipc.InferenceClient;
 import com.example.offlineai.ipc.TtsAdapter;
 import com.example.offlineai.ApiUrlAdapter;
+import com.example.offlineai.agent.AgentManager;
 // Removed: import com.example.offlineai.RerankerHandler; - Now handled by RagQueryManager
 import com.example.offlineai.AppConstants;
 import com.example.offlineai.StateDisplayManager;
@@ -221,6 +222,12 @@ public class RagQaFragment extends Fragment implements StatefulFragment {
     private final AtomicBoolean useExternalTtsForCurrentQuery = new AtomicBoolean(false);
     private final AtomicBoolean useOmniTtsForCurrentQuery = new AtomicBoolean(false); // Track native Omni TTS usage for current query
     
+    // Agent related
+    private AgentManager agentManager;
+    private CheckBox checkBoxAgentMode;
+    private final AtomicBoolean isAgentEnabled = new AtomicBoolean(false);
+    private final AtomicBoolean isAgentExecuting = new AtomicBoolean(false);
+    
     // Audio compression state tracking (for ANR prevention)
     private final AtomicBoolean isUserAudioCompressing = new AtomicBoolean(false); // User audio compression in progress
     private final AtomicBoolean isAiAudioCompressing = new AtomicBoolean(false);   // AI audio compression in progress
@@ -344,6 +351,7 @@ public class RagQaFragment extends Fragment implements StatefulFragment {
         spinnerRerankCount = view.findViewById(R.id.spinnerRerankCount); // Initialize rerank count spinner
         checkBoxThinkingMode = view.findViewById(R.id.checkBoxThinkingModeKey); // Initialize thinking mode checkbox
         checkBoxGraphRagMode = view.findViewById(R.id.checkBoxGraphRagMode);
+        checkBoxAgentMode = view.findViewById(R.id.checkBoxAgentMode); // Initialize Agent mode checkbox
         recyclerViewImageThumbnails = view.findViewById(R.id.recyclerViewImageThumbnails); // Initialize image thumbnail container
         textViewResponse = view.findViewById(R.id.textViewResponse); // Initialize response text view
         recyclerViewChat = view.findViewById(R.id.recyclerViewChat); // Initialize chat RecyclerView
@@ -661,6 +669,9 @@ public class RagQaFragment extends Fragment implements StatefulFragment {
         
         // Initialize main thread Handler
         mainHandler = new Handler(Looper.getMainLooper());
+        
+        // Initialize Agent Manager
+        initializeAgentManager();
         
         // Initialize TtsAdapter and set it to Manager
         ttsAdapter = TtsAdapter.getInstance(requireContext());
@@ -1023,6 +1034,12 @@ public class RagQaFragment extends Fragment implements StatefulFragment {
                     isAsrRunning.set(isRunning);
                     LogManager.logD(TAG, "[ASR] State changed: isRunning=" + isRunning);
                 }
+                
+                @Override
+                public void onAgentActionDetected(String fullResponse) {
+                    LogManager.logI(TAG, "[AGENT] Agent action detected in callback");
+                    checkAndTriggerAgent(fullResponse);
+                }
 
                 // REMOVED: onRequestCallLlm - LLM calls are now handled directly by RagQueryManager
             });
@@ -1264,8 +1281,17 @@ public class RagQaFragment extends Fragment implements StatefulFragment {
             if (checkBoxGraphRagMode != null) {
                 checkBoxGraphRagMode.setChecked(graphRagEnabled);
             }
+            
+            // Load Agent mode setting
+            boolean agentModeEnabled = ConfigManager.getBoolean(requireContext(), ConfigManager.KEY_AGENT_MODE_ENABLED, false);
+            isAgentEnabled.set(agentModeEnabled);
+            if (checkBoxAgentMode != null) {
+                checkBoxAgentMode.setChecked(agentModeEnabled);
+            }
+            
             LogManager.logD(TAG, "Loaded thinking mode setting: " + (!noThinking ? "enabled" : "disabled"));
             LogManager.logD(TAG, "Loaded Graph RAG mode setting: " + (graphRagEnabled ? "enabled" : "disabled"));
+            LogManager.logD(TAG, "Loaded Agent mode setting: " + (agentModeEnabled ? "enabled" : "disabled"));
             isUpdatingUiFromConfig = false;
             
             // Update initial display based on API URL (show API Key or Backend Preference)
@@ -3945,17 +3971,6 @@ public class RagQaFragment extends Fragment implements StatefulFragment {
             LogManager.logE(TAG, "Failed to share image", e);
         }
     }
-    
-    /**
-     * Get current model name for chat UI
-     */
-    private String getCurrentModelName() {
-        if (spinnerApiModel != null && spinnerApiModel.getSelectedItem() != null) {
-            return spinnerApiModel.getSelectedItem().toString();
-        }
-        return "Unknown Model";
-    }
-    
     /**
      * Get current time for chat UI
      */
@@ -4465,6 +4480,12 @@ public class RagQaFragment extends Fragment implements StatefulFragment {
     @Override
     public void onDestroy() {
         super.onDestroy();
+        
+        // Release Agent resources
+        if (agentManager != null) {
+            agentManager.release();
+            agentManager = null;
+        }
         
         // Cleanup media cache (images and audio)
         // Note: Media files are saved to chat history folder, no separate cache cleanup needed
@@ -5584,6 +5605,176 @@ private static class UserInput {
         } else {
             LogManager.logW(TAG, "[VOICE] Vibrator service is null");
         }
+    }
+    
+    // ==================== Helper Methods ====================
+    
+    /**
+     * Get current selected model name from spinner
+     */
+    private String getCurrentModelName() {
+        if (spinnerApiModel != null && spinnerApiModel.getSelectedItem() != null) {
+            return spinnerApiModel.getSelectedItem().toString();
+        }
+        return "Unknown";
+    }
+    
+    // ==================== Agent Integration Methods ====================
+    
+    /**
+     * Initialize Agent Manager and set up callbacks
+     */
+    private void initializeAgentManager() {
+        try {
+            agentManager = new AgentManager(requireContext());
+            LogManager.logI(TAG, "[AGENT] AgentManager initialized");
+            
+            // Set Agent callback
+            agentManager.setCallback(new AgentManager.AgentCallback() {
+                @Override
+                public void onAgentActionDetected(String thinking, String actionType) {
+                    LogManager.logI(TAG, "[AGENT] Action detected: " + actionType);
+                    mainHandler.post(() -> {
+                        addSystemMessage("🤖 Agent: " + thinking);
+                        updateAgentExecutionState(true, "Executing: " + actionType);
+                    });
+                }
+                
+                @Override
+                public void onAgentActionCompleted(boolean success, String message) {
+                    LogManager.logI(TAG, "[AGENT] Action completed: " + message);
+                    mainHandler.post(() -> {
+                        addSystemMessage("✓ " + message);
+                    });
+                }
+                
+                @Override
+                public void onAgentError(String error) {
+                    LogManager.logE(TAG, "[AGENT] Error: " + error);
+                    mainHandler.post(() -> {
+                        Toast.makeText(requireContext(), error, Toast.LENGTH_SHORT).show();
+                        addSystemMessage("❌ Agent error: " + error);
+                        updateAgentExecutionState(false, "");
+                    });
+                }
+                
+                @Override
+                public void onAgentAnswer(String text) {
+                    LogManager.logI(TAG, "[AGENT] Final answer: " + text);
+                    mainHandler.post(() -> {
+                        addAssistantMessage(text);
+                        updateAgentExecutionState(false, "");
+                        resetSendingState();
+                    });
+                }
+            });
+            
+            // Set Agent checkbox listener
+            if (checkBoxAgentMode != null) {
+                checkBoxAgentMode.setOnCheckedChangeListener((buttonView, isChecked) -> {
+                    if (isUpdatingUiFromConfig) {
+                        LogManager.logD(TAG, "[AGENT] Ignore checkbox change during config-driven UI update");
+                        return;
+                    }
+                    
+                    isAgentEnabled.set(isChecked);
+                    
+                    // Save to ConfigManager
+                    ConfigManager.setBoolean(requireContext(), ConfigManager.KEY_AGENT_MODE_ENABLED, isChecked);
+                    LogManager.logI(TAG, "[AGENT] Agent mode " + (isChecked ? "enabled" : "disabled") + ", saved to config");
+                    
+                    if (isChecked && !agentManager.isAccessibilityServiceEnabled()) {
+                        // Show permission dialog
+                        showAgentPermissionDialog();
+                        // Uncheck the box since permission not granted
+                        checkBoxAgentMode.setChecked(false);
+                        isAgentEnabled.set(false);
+                    }
+                });
+            }
+            
+        } catch (Exception e) {
+            LogManager.logE(TAG, "[AGENT] Failed to initialize AgentManager: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Show Agent permission dialog to guide user to enable Accessibility Service
+     */
+    private void showAgentPermissionDialog() {
+        new AlertDialog.Builder(requireContext())
+            .setTitle(R.string.agent_permission_title)
+            .setMessage(R.string.agent_permission_message)
+            .setPositiveButton(R.string.agent_permission_confirm, (dialog, which) -> {
+                agentManager.openAccessibilitySettings();
+            })
+            .setNegativeButton(R.string.agent_permission_cancel, null)
+            .show();
+    }
+    
+    /**
+     * Update Agent execution state and UI
+     */
+    private void updateAgentExecutionState(boolean executing, String statusText) {
+        isAgentExecuting.set(executing);
+        
+        if (executing) {
+            // Update button text
+            buttonSendStop.setText(R.string.agent_executing);
+            LogManager.logI(TAG, "[AGENT] Execution state: " + statusText);
+        } else {
+            // Reset to normal state
+            if (!isSending.get()) {
+                buttonSendStop.setText(R.string.button_send);
+            }
+        }
+    }
+    
+    /**
+     * Check if Agent should be triggered based on model output
+     * Called from streaming callback when detecting <tool_call>
+     */
+    private void checkAndTriggerAgent(String fullResponse) {
+        if (!isAgentEnabled.get()) {
+            return;
+        }
+        
+        if (isAgentExecuting.get()) {
+            LogManager.logD(TAG, "[AGENT] Already executing, skip trigger");
+            return;
+        }
+        
+        if (agentManager == null || !agentManager.containsAgentAction(fullResponse)) {
+            return;
+        }
+        
+        LogManager.logI(TAG, "[AGENT] Detected <tool_call> in model output, triggering Agent");
+        
+        // Get task goal from user prompt
+        String taskGoal = lastUserPrompt != null ? lastUserPrompt : "";
+        
+        // Capture current screenshot (simplified - in real implementation would use MediaProjection)
+        // For now, pass null and Agent will capture when it has MediaProjection initialized
+        android.graphics.Bitmap screenshot = null;
+        
+        // Execute Agent action
+        agentManager.executeFromModelOutput(taskGoal, fullResponse, screenshot);
+    }
+    
+    /**
+     * Add system message to chat (simplified for Agent)
+     */
+    private void addSystemMessage(String message) {
+        // Simply log for now - Agent messages will be shown in streaming output
+        LogManager.logI(TAG, "[AGENT] System message: " + message);
+    }
+    
+    /**
+     * Add assistant message to chat (simplified for Agent)
+     */
+    private void addAssistantMessage(String message) {
+        // Simply log for now - Agent answer will be shown in streaming output
+        LogManager.logI(TAG, "[AGENT] Assistant message: " + message);
     }
 }  // End of RagQaFragment class
 

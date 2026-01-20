@@ -1248,4 +1248,16 @@
     <string name="graph_viewer_view_mode">View Mode</string>
     <string name="graph_viewer_mode_markdown">Markdown</string>
     <string name="graph_viewer_mode_graph">Graph</string>
+    
+    <!-- Agent related strings -->
+    <string name="label_agent_mode">Agent</string>
+    <string name="agent_permission_title">Enable Agent Feature</string>
+    <string name="agent_permission_message">Agent feature requires Accessibility Service permission to automate phone operations.\n\nAfter clicking OK, you will be redirected to the settings page. Please find \"Offline AI\" and enable the accessibility service.\n\nNote: Accessibility service is only used for Agent automation and does not collect any privacy data.</string>
+    <string name="agent_permission_confirm">Go to Settings</string>
+    <string name="agent_permission_cancel">Cancel</string>
+    <string name="agent_service_not_enabled">Agent feature requires accessibility service to be enabled</string>
+    <string name="agent_executing">Agent Executing</string>
+    <string name="agent_step_format">Step %d: %s</string>
+    <string name="agent_task_completed">Task Completed</string>
+    <string name="agent_task_failed">Task Failed</string>
 </resources>

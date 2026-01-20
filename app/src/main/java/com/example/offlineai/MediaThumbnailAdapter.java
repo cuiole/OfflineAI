@@ -896,13 +896,9 @@ public class MediaThumbnailAdapter extends RecyclerView.Adapter<MediaThumbnailAd
                 return null;
             }
 
-            // Smart resize
-            int maxSize = ConfigManager.getImagePreprocessSize(context);
-            Bitmap processedBitmap = smartResize(originalBitmap, maxSize);
-
-            if (processedBitmap != originalBitmap) {
-                originalBitmap.recycle();
-            }
+            // No resize - pass original image to MNN
+            // MNN will handle resizing based on image_size parameter in config
+            Bitmap processedBitmap = originalBitmap;
 
             // Save to chat folder
             if (chatFolderPath == null || chatFolderPath.isEmpty()) {
@@ -931,6 +927,10 @@ public class MediaThumbnailAdapter extends RecyclerView.Adapter<MediaThumbnailAd
         }
     }
 
+    /**
+     * @deprecated No longer used - MNN handles image resizing based on image_size parameter
+     */
+    @Deprecated
     private static Bitmap smartResize(Bitmap bitmap, int maxSize) {
         int width = bitmap.getWidth();
         int height = bitmap.getHeight();

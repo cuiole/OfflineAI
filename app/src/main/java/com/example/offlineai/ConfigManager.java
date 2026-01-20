@@ -117,6 +117,7 @@ public class ConfigManager {
     // LLM 推理相关的键
     public static final String KEY_MAX_SEQUENCE_LENGTH = "maxSequenceLength"; // 最大序列长度
     public static final String KEY_NO_THINKING = "no_thinking"; // 是否禁用思考模式
+    public static final String KEY_AGENT_MODE_ENABLED = "agent_mode_enabled"; // Agent模式是否启用
     public static final String KEY_THREADS = "threads"; // ONNX推理线程数
     public static final String KEY_EMBEDDING_CONCURRENCY = "embedding_concurrency"; // Embedding session concurrency for knowledge base building
     public static final String KEY_EMBEDDING_THREADS = "embedding_threads"; // MNN threads per embedding session for knowledge base building

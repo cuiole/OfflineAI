@@ -1266,4 +1266,16 @@
     <string name="graph_viewer_view_mode">查看模式</string>
     <string name="graph_viewer_mode_markdown">Markdown</string>
     <string name="graph_viewer_mode_graph">图形</string>
+    
+    <!-- Agent related strings -->
+    <string name="label_agent_mode">Agent</string>
+    <string name="agent_permission_title">开启Agent功能</string>
+    <string name="agent_permission_message">Agent功能需要无障碍服务权限才能自动操作手机。\n\n点击确定后将跳转到设置页面，请找到"离线AI"并开启无障碍服务。\n\n注意：无障碍服务仅用于Agent自动操作，不会收集任何隐私数据。</string>
+    <string name="agent_permission_confirm">去设置</string>
+    <string name="agent_permission_cancel">取消</string>
+    <string name="agent_service_not_enabled">Agent功能需要开启无障碍服务</string>
+    <string name="agent_executing">Agent执行中</string>
+    <string name="agent_step_format">步骤 %d: %s</string>
+    <string name="agent_task_completed">任务完成</string>
+    <string name="agent_task_failed">任务失败</string>
 </resources>

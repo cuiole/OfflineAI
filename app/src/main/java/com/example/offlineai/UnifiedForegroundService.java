@@ -50,7 +50,8 @@ public class UnifiedForegroundService extends Service {
         KB_BUILD("知识库构建"),         // 知识库构建任务
         MODEL_DOWNLOAD("模型下载"),     // 模型下载任务
         NOTE_PROCESSING("知识笔记处理"), // 笔记处理任务
-        INFERENCE("推理中");            // 长时间推理任务
+        INFERENCE("推理中"),            // 长时间推理任务
+        AGENT_EXECUTING("Agent执行中"); // Agent自动操作任务
         
         private final String displayName;
         

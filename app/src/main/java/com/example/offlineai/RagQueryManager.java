@@ -266,6 +266,9 @@ public class RagQueryManager {
         void onAsrStateChanged(boolean isRunning);
 
         // REMOVED: onRequestCallLlm - LLM calls are now handled directly by RagQueryManager.runLlmPipeline()
+        
+        // Notify UI that Agent action has been detected in model output
+        void onAgentActionDetected(String fullResponse);
     }
 
     public void updateCallback(@NonNull RagQueryCallback callback) {
@@ -1329,13 +1332,25 @@ public class RagQueryManager {
             return;
         }
         
-        // Step 1: Write to TaskLogBuffer (Manager owns buffer writes)
+        // Write to TaskLogBuffer (Manager owns buffer writes)
         String taskId = currentLlmTaskId;
         if (taskId != null && !taskId.isEmpty()) {
             appendInferenceLog(taskId, chunk);
         }
         
-        // Step 2: Notify UI (UI only displays, does NOT write buffer)
+        // Accumulate full response for Agent detection
+        fullResponseAccumulator.append(chunk);
+        
+        // Check if Agent should be triggered (detect complete tool_call)
+        String fullResponse = fullResponseAccumulator.toString();
+        if (fullResponse.contains("tool_call") && fullResponse.contains("}")) {
+            // Notify Fragment to trigger Agent
+            if (callback != null) {
+                callback.onAgentActionDetected(fullResponse);
+            }
+        }
+        
+        // Notify UI (UI only displays, does NOT write buffer)
         RagQueryCallback cb = this.callback;
         if (cb != null) {
             cb.onStreamingData(chunk);

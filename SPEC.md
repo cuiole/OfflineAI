@@ -417,6 +417,18 @@ flowchart TB
 ### 4.1 MNN 推理核心
 - **统一入口**：LocalLLMMNNHandler 负责检测模型目录，判断是否具备 LLM、视觉、Diffusion、TTS 功能。需求：自动化检测避免用户手动配置，加载失败时给出可读日志。
 - **配置构建**：通过 MnnInference.ConfigBuilder 设置后端、线程、精度、内存模式、功耗策略、max_all_tokens、max_new_tokens 等关键参数；根据模型内文件自动启用视觉/音频模块，TTS 默认设置 dit_steps=5、dit_solver=1。需求：确保配置优先级为运行时参数 > ConfigManager > 模型 config.json。
+- **VL 图片尺寸配置（2025-01-19 重构）**：VL（Vision-Language）模型的图片预处理尺寸控制机制。
+  - **设计变更**：从 Java 层 resize 改为通过 MNN API 的 `image_size` 参数控制，让 MNN 根据模型配置自动处理图片尺寸。
+  - **配置参数**（`ConfigManager.IMAGE_SIZE_*`）：
+    - **手动模式**：420, 504, 560, 616, 672, 728, 784, 800（所有值都是 28 的倍数，优化 VL 模型性能）
+    - **Auto 模式**：`IMAGE_SIZE_AUTO = 0`，不设置 `image_size` 参数，让 MNN 使用模型 `llm_config.json` 的 `image_size` 字段（默认 448）
+  - **实现位置**：
+    - UI 设置：`SettingsFragment.java` Line 1211-1245（滑块范围 0-8，最右边为 Auto）
+    - Java 层：`MediaThumbnailAdapter.processImage()` Line 899-901（不再 resize，直接保存原图）
+    - MNN API：`MnnInference.ConfigBuilder.imageSize()` Line 437-440（新增方法）
+    - 配置传递：`LocalLLMMNNHandler.buildMnnConfig()` Line 1562-1573（根据设置传递参数）
+  - **配置优先级**：RuntimeConfig > 模型 `llm_config.json`（仅 Auto 模式使用模型默认值）
+  - **mllm 独立配置**：Visual encoder 的 precision、backend、threads 由 `config.json` 的 `mllm` 部分决定，不受上层 API 设置影响（`omni.cpp` Line 88-114）。
 - **特性实现**：LLM 流式输出、KV Cache 管控、手动/默认采样切换；视觉模型支持多轮图像追问，需避免 chunk>0 导致的 mVisionEmbeddings 崩溃；Diffusion 在本地执行文本转图并输出进度；TTS 通过 Talker Diffusion 输出音频文件并将路径传回 UI。
 - **JNI 实现**：mnn_jni.cpp 中封装 Session 生命周期、创建 ExecutorScope、绑定流式回调与音频回调，处理停止标志。需求：日志需英文输出，关键路径（加载、推理、回调）均保留调试信息，错误需抛回 Java 层处理。
 - **Diffusion OpenCL 后端配置（2025-12-16 修复，2025-12-16 增强可配置性）**：针对 Adreno GPU 上 Diffusion 模型推理出现黑图/NaN 问题的修复方案。
@@ -9803,6 +9815,92 @@ public synchronized boolean initialize(String modelName) {
 
 **教训**：
 > 这是第N次踩同样的坑！路径拼接问题在多层架构中极易出现，必须在设计阶段明确"谁负责拼接路径"，避免每一层都尝试拼接。
+
+---
+
+### I.2 Bert-Vits2 TTS "鸟语"问题（MNN 上游兼容性问题）
+
+**问题描述**：
+2026年1月，Bert-Vits2 TTS 模型生成的音频出现"鸟语"（高频噪音、无法理解的声音），但之前（2024年11月前）工作正常。
+
+**调试过程**：
+
+**Phase 1: 初步排查**
+- ✅ 确认模型文件完整（MD5 校验通过）
+- ✅ 确认 config.json 配置正确
+- ✅ 确认 Java 层参数传递正确
+
+**Phase 2: BERT 特征调试**
+- 发现 `en_bert` 和 `cn_bert` 特征值全为 `0.0f`
+- 添加详细日志到 `chinese_bert.cpp`（INFO 级别）
+- 确认 BERT 模型输出**正常**（非零值）
+
+**Phase 3: TTS Generator 输入调试**
+- 发现 `tts_generator.cpp` Line 81 硬编码 `en_bert=0.0f`（工作版本遗留代码）
+- 修复：恢复正常的 `en_bert` 输入
+- 修复 `mnn_bertvits2_tts_impl.cpp`：中文用 `cn_bert`，英文用 `en_bert`，另一个填零
+- **结果**：BERT 输入正确，但音频**仍是鸟语**
+
+**Phase 4: MNN 上游变化分析**
+- 对比 MNN 版本：工作版本（2024年10月）vs 当前版本（2026年1月）
+- 发现 MNN 核心推理引擎重大变化：
+  - **版本跨越**：3.0.0 → 3.3.1（4个大版本）
+  - **CPU Backend 重构**：线程池、CPU IDs 绑定机制完全重写
+  - **Pipeline 执行流程**：内存分配逻辑调整（`needAllocIO()` 检查）
+  - **算子优化**：LayerNorm、Convolution、ReduceSum 等大量优化
+
+**根本原因分析**：
+
+**MNN 上游改动导致问题的概率：85%+**
+
+1. **TTS 框架本身无变化**：
+   - `CMakeLists.txt`：完全一致
+   - 源文件列表：完全一致
+   - 编译选项：完全一致
+
+2. **BERT 正常但 TTS Generator 异常**：
+   - **BERT 模型**：简单 Transformer Encoder，对 MNN 版本不敏感 ✅
+   - **TTS Generator 模型**：复杂生成模型（VITS/Flow/Diffusion），对推理引擎更敏感 ❌
+
+3. **MNN Pipeline 变化可能影响 TTS Generator**：
+   ```cpp
+   // 新版 MNN 增加了 needAllocIO() 检查，可能影响某些算子的输出内存分配
+   if (iter.execution->needAllocIO()) {
+       for (auto t : iter.workOutputs) {
+           auto res = _allocTensor(t, curBackend, mOutputStatic, index);
+   ```
+
+**最终决策**：
+- ❌ **不回退 MNN 版本**（旧版本缺少 `mnn_supertonic_tts_impl.cpp` 等新文件）
+- ✅ **保持当前最新版本 MNN**
+- ⏳ **等待 MNN 官方修复推理引擎兼容性问题**
+
+**已修复的代码**：
+1. `libs/mnn/apps/frameworks/mnn_tts/src/bertvits2/tts_generator.cpp` Line 80：
+   ```cpp
+   // ✅ 恢复正常的 en_bert 输入（不再硬编码为 0）
+   input_pointer1[1][i * token_num + j] = en_bert[j][i];
+   ```
+
+2. `libs/mnn/apps/frameworks/mnn_tts/src/bertvits2/mnn_bertvits2_tts_impl.cpp`：
+   - Line 117：中文输入时，`en_bert` 填零
+   - Line 160：英文输入时，`cn_bert` 填零
+
+**当前状态**：
+- ✅ BERT 特征提取正常
+- ✅ BERT 输入到 TTS Generator 正确
+- ❌ TTS Generator 推理结果异常（鸟语）
+- ⏳ 等待 MNN 官方修复
+
+**相关文件**：
+- `libs/mnn/apps/frameworks/mnn_tts/src/bertvits2/tts_generator.cpp`
+- `libs/mnn/apps/frameworks/mnn_tts/src/bertvits2/mnn_bertvits2_tts_impl.cpp`
+- `libs/mnn/apps/frameworks/mnn_tts/src/bertvits2/chinese_bert.cpp`
+
+**教训**：
+> 依赖上游推理引擎时，版本升级可能引入不兼容变化。对于复杂生成模型（如 TTS、Diffusion），推理引擎的内存布局、算子执行逻辑变化可能导致输出异常，即使简单模型（如 BERT）工作正常。建议：(1) 锁定推理引擎版本；(2) 升级前充分测试；(3) 保留回退方案。
+
+**调试日期**：2026年1月12日
 
 ---
 
