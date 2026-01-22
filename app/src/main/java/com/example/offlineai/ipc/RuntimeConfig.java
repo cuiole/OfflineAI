@@ -17,6 +17,7 @@ public class RuntimeConfig implements Parcelable {
 
     // Thinking / manual params
     public boolean noThinking;
+    public boolean agentModeEnabled;  // Agent mode enabled flag
     public boolean priorityManualParams;
     public float manualTemperature;
     public int manualTopK;
@@ -71,6 +72,7 @@ public class RuntimeConfig implements Parcelable {
         maxNewTokens = in.readInt();
 
         noThinking = in.readByte() != 0;
+        agentModeEnabled = in.readByte() != 0;
         priorityManualParams = in.readByte() != 0;
         manualTemperature = in.readFloat();
         manualTopK = in.readInt();
@@ -117,6 +119,7 @@ public class RuntimeConfig implements Parcelable {
         dest.writeInt(maxNewTokens);
 
         dest.writeByte((byte) (noThinking ? 1 : 0));
+        dest.writeByte((byte) (agentModeEnabled ? 1 : 0));
         dest.writeByte((byte) (priorityManualParams ? 1 : 0));
         dest.writeFloat(manualTemperature);
         dest.writeInt(manualTopK);

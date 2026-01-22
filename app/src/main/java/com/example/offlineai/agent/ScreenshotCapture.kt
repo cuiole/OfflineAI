@@ -49,6 +49,13 @@ class ScreenshotCapture(private val context: Context) {
     }
     
     /**
+     * Check if MediaProjection is initialized
+     */
+    fun isInitialized(): Boolean {
+        return mediaProjection != null
+    }
+    
+    /**
      * Initialize MediaProjection (requires user permission)
      */
     fun initMediaProjection(resultCode: Int, data: android.content.Intent) {
@@ -56,11 +63,20 @@ class ScreenshotCapture(private val context: Context) {
             as MediaProjectionManager
         
         mediaProjection = projectionManager.getMediaProjection(resultCode, data)
-        LogManager.logI(TAG, "MediaProjection initialized")
+        
+        // Register callback (required for Android 14+)
+        mediaProjection?.registerCallback(object : MediaProjection.Callback() {
+            override fun onStop() {
+                LogManager.logI(TAG, "MediaProjection stopped")
+                release()
+            }
+        }, Handler(Looper.getMainLooper()))
+        
+        LogManager.logI(TAG, "MediaProjection initialized with callback")
     }
     
     /**
-     * Capture current screen as Bitmap
+     * Capture screen and return bitmap
      */
     fun captureScreen(): Bitmap? {
         if (mediaProjection == null) {
@@ -80,7 +96,9 @@ class ScreenshotCapture(private val context: Context) {
             }
             
             // Create VirtualDisplay
+            val isFirstCapture = virtualDisplay == null
             if (virtualDisplay == null) {
+                LogManager.logI(TAG, "Creating VirtualDisplay for first time")
                 virtualDisplay = mediaProjection?.createVirtualDisplay(
                     "AgentScreenCapture",
                     screenWidth,
@@ -91,26 +109,44 @@ class ScreenshotCapture(private val context: Context) {
                     null,
                     null
                 )
+                
+                // First capture needs more time for VirtualDisplay to render
+                LogManager.logI(TAG, "Waiting for VirtualDisplay to initialize...")
+                Thread.sleep(800)
+            } else {
+                // Subsequent captures only need a short delay
+                Thread.sleep(100)
             }
             
-            // Wait a bit for the display to render
-            Thread.sleep(100)
+            // Retry logic for acquiring image
+            var image: Image? = null
+            val maxRetries = if (isFirstCapture) 5 else 3
+            var retryCount = 0
             
-            // Acquire latest image
-            val image = imageReader?.acquireLatestImage()
+            while (image == null && retryCount < maxRetries) {
+                image = imageReader?.acquireLatestImage()
+                if (image == null) {
+                    retryCount++
+                    if (retryCount < maxRetries) {
+                        LogManager.logD(TAG, "No image available, retry $retryCount/$maxRetries")
+                        Thread.sleep(200)
+                    }
+                }
+            }
+            
             if (image == null) {
-                LogManager.logW(TAG, "No image available")
+                LogManager.logW(TAG, "No image available after $maxRetries retries")
                 return null
             }
             
             val bitmap = imageToBitmap(image)
             image.close()
             
-            LogManager.logD(TAG, "Screenshot captured: ${bitmap?.width}x${bitmap?.height}")
+            LogManager.logI(TAG, "Screenshot captured: ${bitmap?.width}x${bitmap?.height}")
             return bitmap
             
         } catch (e: Exception) {
-            LogManager.logE(TAG, "Failed to capture screenshot: ${e.message}")
+            LogManager.logE(TAG, "Failed to capture screenshot: ${e.message}", e)
             e.printStackTrace()
             return null
         }

@@ -127,34 +127,78 @@ class ActionExecutor(private val context: Context) {
     }
     
     private fun executeOpen(action: AgentAction.Open): ExecutionResult {
-        val packageName = AppNameMapper.getPackageName(context, action.appName)
+        LogManager.logI(TAG, "Opening app: ${action.appName}")
         
-        if (packageName == null) {
-            return ExecutionResult(
+        // Priority 1 & 2: Check predefined launch strategy
+        val strategy = AppNameMapper.getLaunchStrategy(action.appName)
+        
+        if (strategy != null) {
+            return when (strategy) {
+                is AppNameMapper.LaunchStrategy.IntentAction -> {
+                    // Priority 1: Use Intent Action (system apps)
+                    try {
+                        val intent = strategy.createIntent()
+                        context.startActivity(intent)
+                        LogManager.logI(TAG, "Opened via Intent Action: ${action.appName}")
+                        ExecutionResult(
+                            success = true,
+                            message = "Opened app: ${action.appName}"
+                        )
+                    } catch (e: Exception) {
+                        LogManager.logE(TAG, "Failed to open via Intent: ${action.appName}", e)
+                        ExecutionResult(
+                            success = false,
+                            message = "Failed to open app: ${action.appName}",
+                            error = e
+                        )
+                    }
+                }
+                is AppNameMapper.LaunchStrategy.PackageName -> {
+                    // Priority 2: Use package name (third-party apps)
+                    openViaPackageName(action.appName, strategy.packageName)
+                }
+            }
+        }
+        
+        // Priority 3: Fuzzy match on installed apps
+        val fuzzyPackageName = AppNameMapper.getPackageName(context, action.appName)
+        return if (fuzzyPackageName != null) {
+            openViaPackageName(action.appName, fuzzyPackageName)
+        } else {
+            LogManager.logW(TAG, "App not found: ${action.appName}")
+            ExecutionResult(
                 success = false,
                 message = "App not found: ${action.appName}"
             )
         }
-        
+    }
+    
+    /**
+     * Open app via package name
+     */
+    private fun openViaPackageName(appName: String, packageName: String): ExecutionResult {
         return try {
             val intent = context.packageManager.getLaunchIntentForPackage(packageName)
             if (intent != null) {
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 context.startActivity(intent)
+                LogManager.logI(TAG, "Opened via package: $appName -> $packageName")
                 ExecutionResult(
                     success = true,
-                    message = "Opened app: ${action.appName}"
+                    message = "Opened app: $appName"
                 )
             } else {
+                LogManager.logW(TAG, "Cannot launch app: $appName (no launch intent)")
                 ExecutionResult(
                     success = false,
-                    message = "Cannot launch app: ${action.appName}"
+                    message = "Cannot launch app: $appName"
                 )
             }
         } catch (e: Exception) {
+            LogManager.logE(TAG, "Failed to open app: $appName", e)
             ExecutionResult(
                 success = false,
-                message = "Failed to open app: ${action.appName}",
+                message = "Failed to open app: $appName",
                 error = e
             )
         }

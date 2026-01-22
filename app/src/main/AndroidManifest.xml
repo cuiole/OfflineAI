@@ -13,6 +13,7 @@
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
@@ -94,12 +95,20 @@
             </intent-filter>
         </activity>
         
+        <!-- MediaProjection permission request activity for Agent screenshot -->
+        <activity
+            android:name=".agent.MediaProjectionPermissionActivity"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:taskAffinity="" />
+        
         <!-- 统一前台服务 - 保持app存活和支持长时间任务 -->
         <service
             android:name=".UnifiedForegroundService"
             android:enabled="true"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="dataSync|mediaProjection" />
         
         <!-- Inference service running in a dedicated process for MNN/LLM tasks -->
         <service

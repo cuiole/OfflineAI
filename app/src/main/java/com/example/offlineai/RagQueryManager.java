@@ -2770,6 +2770,162 @@ public class RagQueryManager {
     }
 
     /**
+     * Generic synchronous query method
+     * Blocks until query completes and returns the result
+     * Can be used by Agent or any other component that needs synchronous query
+     * 
+     * @param request Query request with all parameters
+     * @return Model output string, or null if error
+     */
+    @Nullable
+    public String querySync(@NonNull QueryRequest request) {
+        LogManager.logI(TAG, "[SYNC] Starting synchronous query");
+        
+        try {
+            // Use CountDownLatch to block until query completes
+            final java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
+            final StringBuilder resultBuilder = new StringBuilder();
+            final java.util.concurrent.atomic.AtomicBoolean success = new java.util.concurrent.atomic.AtomicBoolean(false);
+            
+            // Wrap original callback instead of replacing it
+            // This allows UI updates and history saving while also returning result to caller
+            final RagQueryCallback originalCallback = this.callback;
+            updateCallback(new RagQueryCallback() {
+                @Override
+                public void onSendingStateChanged(boolean sending) {
+                    if (originalCallback != null) {
+                        originalCallback.onSendingStateChanged(sending);
+                    }
+                }
+                
+                @Override
+                public void onTtsStateChanged(boolean generating) {
+                    if (originalCallback != null) {
+                        originalCallback.onTtsStateChanged(generating);
+                    }
+                }
+                
+                @Override
+                public void onProgressUpdate(int progress, String message) {
+                    if (originalCallback != null) {
+                        originalCallback.onProgressUpdate(progress, message);
+                    }
+                }
+                
+                @Override
+                public void onStreamingData(String chunk) {
+                    // Forward to original callback for UI update
+                    if (originalCallback != null) {
+                        originalCallback.onStreamingData(chunk);
+                    }
+                    // Accumulate streaming data for return value
+                    if (chunk != null) {
+                        resultBuilder.append(chunk);
+                    }
+                }
+                
+                @Override
+                public void onQueryComplete(boolean querySuccess, String errorMessage) {
+                    // Forward to original callback for history saving
+                    if (originalCallback != null) {
+                        originalCallback.onQueryComplete(querySuccess, errorMessage);
+                    }
+                    // Unblock synchronous caller
+                    success.set(querySuccess);
+                    latch.countDown();
+                    LogManager.logI(TAG, "[SYNC] Query completed: " + querySuccess);
+                }
+                
+                @Override
+                public void onLlmCompleteWithAudio(String audioPath) {
+                    if (originalCallback != null) {
+                        originalCallback.onLlmCompleteWithAudio(audioPath);
+                    }
+                }
+                
+                @Override
+                public void onRequestReloadChatHistory() {
+                    if (originalCallback != null) {
+                        originalCallback.onRequestReloadChatHistory();
+                    }
+                }
+                
+                @Override
+                public void onRequestUpdateButtonText() {
+                    if (originalCallback != null) {
+                        originalCallback.onRequestUpdateButtonText();
+                    }
+                }
+                
+                @Override
+                public void onResetStopFlagsForNewQuery() {
+                    if (originalCallback != null) {
+                        originalCallback.onResetStopFlagsForNewQuery();
+                    }
+                }
+                
+                @Override
+                public void onQueryStarted(@NonNull String taskId) {
+                    if (originalCallback != null) {
+                        originalCallback.onQueryStarted(taskId);
+                    }
+                }
+                
+                @Override
+                public void onRequestStartInferenceForeground(@NonNull String description) {
+                    if (originalCallback != null) {
+                        originalCallback.onRequestStartInferenceForeground(description);
+                    }
+                }
+                
+                @Override
+                public void onRequestEndInferenceForeground() {
+                    if (originalCallback != null) {
+                        originalCallback.onRequestEndInferenceForeground();
+                    }
+                }
+                
+                @Override
+                public void onAgentActionDetected(String fullResponse) {
+                    if (originalCallback != null) {
+                        originalCallback.onAgentActionDetected(fullResponse);
+                    }
+                }
+                
+                @Override
+                public void onAsrStateChanged(boolean isRunning) {
+                    if (originalCallback != null) {
+                        originalCallback.onAsrStateChanged(isRunning);
+                    }
+                }
+            });
+            
+            // Start query
+            startQuery(request);
+            
+            // Wait for completion (no timeout - caller decides timeout strategy)
+            LogManager.logI(TAG, "[SYNC] Waiting for query to complete...");
+            latch.await();
+            
+            // Restore original callback
+            updateCallback(originalCallback);
+            
+            if (!success.get()) {
+                LogManager.logE(TAG, "[SYNC] Query failed");
+                return null;
+            }
+            
+            String result = resultBuilder.toString();
+            LogManager.logI(TAG, "[SYNC] Query result length: " + result.length());
+            return result;
+            
+        } catch (Exception e) {
+            LogManager.logE(TAG, "[SYNC] Error in synchronous query", e);
+            return null;
+        }
+    }
+
+    /**
      * Shutdown the manager-owned RAG executor. Should be called when the
      * corresponding UI lifecycle (e.g. Fragment) is being destroyed to
      * release resources. Business callers should not submit new tasks after

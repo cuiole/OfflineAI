@@ -1,6 +1,7 @@
 package com.example.offlineai.agent;
 
 import android.content.Context;
+import android.content.Intent;
 import android.graphics.Bitmap;
 import android.os.Handler;
 import android.os.Looper;
@@ -11,6 +12,7 @@ import com.example.offlineai.agent.model.AgentAction;
 import com.example.offlineai.agent.model.ExecutionResult;
 import com.example.offlineai.agent.parser.ActionParser;
 import com.example.offlineai.agent.utils.AccessibilityPermissionHelper;
+import com.example.offlineai.agent.utils.ScreenshotCapture;
 
 import org.jetbrains.annotations.NotNull;
 
@@ -27,11 +29,17 @@ public class AgentManager {
     
     private static final String TAG = "AgentManager";
     
+    private static AgentManager instance;
+    
     private final Context context;
     private final AgentEngine engine;
     private final Handler mainHandler;
+    private final ScreenshotCapture screenshotCapture;
     
     private AgentCallback callback;
+    private String pendingTaskGoal;
+    private com.example.offlineai.RagQueryManager pendingRagQueryManager;
+    private boolean waitingForMediaProjection = false;
     
     /**
      * Callback interface for agent events
@@ -43,10 +51,11 @@ public class AgentManager {
         void onAgentAnswer(String text);
     }
     
-    public AgentManager(Context context) {
+    private AgentManager(Context context) {
         this.context = context.getApplicationContext();
         this.engine = new AgentEngine(this.context);
         this.mainHandler = new Handler(Looper.getMainLooper());
+        this.screenshotCapture = new ScreenshotCapture(this.context);
         
         // Set engine callback
         engine.setCallback(new AgentEngine.AgentCallback() {
@@ -93,6 +102,16 @@ public class AgentManager {
                 LogManager.logI(TAG, "Agent asking user: " + question);
             }
         });
+    }
+    
+    /**
+     * Get singleton instance
+     */
+    public static synchronized AgentManager getInstance(Context context) {
+        if (instance == null) {
+            instance = new AgentManager(context);
+        }
+        return instance;
     }
     
     /**
@@ -185,10 +204,127 @@ public class AgentManager {
     }
     
     /**
+     * Start Agent autonomous loop execution via AgentAccessibilityService
+     * This will run Agent in a loop: screenshot -> inference -> action -> repeat
+     */
+    public void startAgentLoop(final String taskGoal, final com.example.offlineai.RagQueryManager ragQueryManager) {
+        if (!isAccessibilityServiceEnabled()) {
+            LogManager.logE(TAG, "Accessibility service not enabled");
+            if (callback != null) {
+                mainHandler.post(() -> callback.onAgentError("需要开启无障碍服务才能使用Agent功能"));
+            }
+            return;
+        }
+        
+        // Check if MediaProjection is initialized
+        if (!isMediaProjectionInitialized()) {
+            LogManager.logI(TAG, "MediaProjection not initialized, requesting permission");
+            pendingTaskGoal = taskGoal;
+            pendingRagQueryManager = ragQueryManager;
+            requestMediaProjectionPermission();
+            return;
+        }
+        
+        // Get AgentAccessibilityService instance
+        com.example.offlineai.agent.service.AgentAccessibilityService service = 
+            com.example.offlineai.agent.service.AgentAccessibilityService.Companion.getInstance();
+        
+        if (service == null) {
+            LogManager.logE(TAG, "AgentAccessibilityService instance is null");
+            if (callback != null) {
+                mainHandler.post(() -> callback.onAgentError("无障碍服务未运行"));
+            }
+            return;
+        }
+        
+        LogManager.logI(TAG, "Starting Agent loop execution: " + taskGoal);
+        
+        // Set ScreenshotCapture in AgentEngine
+        engine.setScreenshotCapture(screenshotCapture);
+        
+        // Set references in Service
+        service.setRagQueryManager(ragQueryManager);
+        service.setAgentEngine(engine);
+        
+        // Start Agent loop
+        service.startAgentLoop(taskGoal);
+    }
+    
+    /**
+     * Check if MediaProjection is initialized
+     */
+    private boolean isMediaProjectionInitialized() {
+        return screenshotCapture.isInitialized();
+    }
+    
+    /**
+     * Request MediaProjection permission
+     */
+    private void requestMediaProjectionPermission() {
+        if (waitingForMediaProjection) {
+            LogManager.logW(TAG, "Already waiting for MediaProjection permission");
+            return;
+        }
+        
+        waitingForMediaProjection = true;
+        MediaProjectionPermissionActivity.start(context);
+    }
+    
+    /**
+     * Called when MediaProjection permission is granted
+     */
+    public void onMediaProjectionGranted(int resultCode, Intent data) {
+        LogManager.logI(TAG, "MediaProjection permission granted, initializing ScreenshotCapture");
+        waitingForMediaProjection = false;
+        
+        // Initialize ScreenshotCapture
+        screenshotCapture.initMediaProjection(resultCode, data);
+        
+        // Resume pending Agent loop if exists
+        if (pendingTaskGoal != null && pendingRagQueryManager != null) {
+            LogManager.logI(TAG, "Resuming pending Agent loop");
+            String taskGoal = pendingTaskGoal;
+            com.example.offlineai.RagQueryManager ragQueryManager = pendingRagQueryManager;
+            pendingTaskGoal = null;
+            pendingRagQueryManager = null;
+            
+            startAgentLoop(taskGoal, ragQueryManager);
+        }
+    }
+    
+    /**
+     * Called when MediaProjection permission is denied
+     */
+    public void onMediaProjectionDenied() {
+        LogManager.logW(TAG, "MediaProjection permission denied");
+        waitingForMediaProjection = false;
+        pendingTaskGoal = null;
+        pendingRagQueryManager = null;
+        
+        if (callback != null) {
+            mainHandler.post(() -> callback.onAgentError("需要屏幕录制权限才能使用Agent截图功能"));
+        }
+    }
+    
+    /**
+     * Stop Agent loop execution
+     */
+    public void stopAgentLoop() {
+        com.example.offlineai.agent.service.AgentAccessibilityService service = 
+            com.example.offlineai.agent.service.AgentAccessibilityService.Companion.getInstance();
+        
+        if (service != null) {
+            service.stopAgentLoop();
+            LogManager.logI(TAG, "Agent loop stopped");
+        }
+    }
+    
+    /**
      * Stop current agent execution
      */
     public void stop() {
         engine.stop();
+        stopAgentLoop();
     }
     
     /**
@@ -196,5 +332,12 @@ public class AgentManager {
      */
     public void release() {
         engine.release();
+    }
+    
+    /**
+     * Get AgentEngine instance (for Service access)
+     */
+    public AgentEngine getEngine() {
+        return engine;
     }
 }

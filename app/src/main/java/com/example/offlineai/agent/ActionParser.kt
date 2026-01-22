@@ -1,5 +1,6 @@
 package com.example.offlineai.agent.parser
 
+import com.example.offlineai.LogManager
 import com.example.offlineai.agent.model.AgentAction
 import com.example.offlineai.agent.model.AgentResponse
 import org.json.JSONObject
@@ -11,6 +12,7 @@ import java.util.regex.Pattern
  */
 object ActionParser {
     
+    private const val TAG = "ActionParser"
     private const val SCALE_FACTOR = 999
     
     /**
@@ -23,11 +25,13 @@ object ActionParser {
      * <tool_call>
      * {"name": "mobile_use", "arguments": {...}}
      * </tool_call>
+     * 
+     * Note: <thinking> tag is optional (MAI-UI model may not output it)
      */
     fun parse(modelOutput: String): AgentResponse? {
         try {
             val normalized = normalizeOutput(modelOutput)
-            val thinking = extractThinking(normalized) ?: return null
+            val thinking = extractThinking(normalized) ?: ""  // Make thinking optional
             val toolCallJson = extractToolCall(normalized) ?: return null
             val action = parseAction(toolCallJson) ?: return null
             
@@ -54,6 +58,7 @@ object ActionParser {
     
     /**
      * Extract thinking content from <thinking> tags
+     * Returns null if not found (thinking is optional in MAI-UI design)
      */
     private fun extractThinking(output: String): String? {
         val pattern = Pattern.compile("<thinking>(.*?)</thinking>", Pattern.DOTALL)
@@ -61,12 +66,13 @@ object ActionParser {
         return if (matcher.find()) {
             matcher.group(1)?.trim()?.trim('"')
         } else {
-            null
+            null  // Thinking is optional
         }
     }
     
     /**
      * Extract tool_call JSON from <tool_call> tags
+     * Returns null if not found (tool_call is required)
      */
     private fun extractToolCall(output: String): JSONObject? {
         val pattern = Pattern.compile("<tool_call>(.*?)</tool_call>", Pattern.DOTALL)
@@ -76,10 +82,11 @@ object ActionParser {
             try {
                 JSONObject(jsonStr)
             } catch (e: Exception) {
+                e.printStackTrace()
                 null
             }
         } else {
-            null
+            null  // tool_call is required, return null to trigger parse failure
         }
     }
     
@@ -90,10 +97,10 @@ object ActionParser {
         val arguments = toolCallJson.optJSONObject("arguments") ?: return null
         val actionType = arguments.optString("action", "")
         
+        // MAI-UI Standard Action Space (9 basic actions)
         return when (actionType) {
             "click" -> parseClick(arguments)
             "long_press" -> parseLongPress(arguments)
-            "double_click" -> parseDoubleClick(arguments)
             "type" -> parseType(arguments)
             "swipe" -> parseSwipe(arguments)
             "open" -> parseOpen(arguments)
@@ -102,8 +109,10 @@ object ActionParser {
             "wait" -> AgentAction.Wait
             "terminate" -> parseTerminate(arguments)
             "answer" -> parseAnswer(arguments)
-            "ask_user" -> parseAskUser(arguments)
-            else -> null
+            else -> {
+                LogManager.logW(TAG, "Unknown action type: '$actionType' - Model may not follow Action Space strictly")
+                null
+            }
         }
     }
     

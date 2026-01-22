@@ -927,8 +927,15 @@ public class LocalLLMMNNHandler implements LocalLlmHandler.InferenceEngine {
         }
         
         try {
-            // Get history rounds and chat folder from RuntimeConfig snapshot
-            int historyRounds = RuntimeConfigHolder.getHistoryRoundsOrDefault(ConfigManager.DEFAULT_HISTORY_ROUNDS);
+            // Get history rounds: use params override if set (Agent mode uses 0), otherwise use RuntimeConfig
+            int historyRounds;
+            if (params != null && params.historyRounds != null) {
+                historyRounds = params.historyRounds;
+                LogManager.logI(TAG, "[HISTORY] Using params.historyRounds override: " + historyRounds);
+            } else {
+                historyRounds = RuntimeConfigHolder.getHistoryRoundsOrDefault(ConfigManager.DEFAULT_HISTORY_ROUNDS);
+                LogManager.logI(TAG, "[HISTORY] Using RuntimeConfig historyRounds: " + historyRounds);
+            }
             LogManager.logI(TAG, "[HISTORY] Starting inference with " + historyRounds + " rounds of history");
             
             // Load current chat history from markdown

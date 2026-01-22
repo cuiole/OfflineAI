@@ -626,7 +626,19 @@ flowchart TB
 5. **隐私与合规**：
    - 用户数据（文档、向量、日志）均存储本地；提供手动备份/导出方案。
    - 提示用户遵守模型许可与内容生成规范。
-6. **x86_64 模拟器兼容性（TTS 模块）**：
+6. **Agent 模式优化**：
+   - **历史记录自动管理**：勾选 Agent 模式时，系统自动将历史轮数设置为 0，避免历史对话干扰 Agent 推理；取消勾选时自动恢复默认历史轮数。
+   - **应用打开策略**：统一在 `AppNameMapper.kt` 管理应用启动策略，采用三层优先级：
+     1. **Intent Action**（系统应用，如 Dialer/Camera/Settings）- 最佳跨设备兼容性
+     2. **包名映射**（第三方应用，如微信/淘宝）- 预定义常用应用
+     3. **模糊匹配**（已安装应用）- 兜底方案
+   - **系统提示词注入**：Agent 模式启用时自动注入 MAI-UI 风格的系统提示词，指导模型输出 `<tool_call>` 格式的动作指令。
+   - **代码风格统一**：Agent 模块全部使用 Kotlin 编写（`AgentPrompts.kt`、`ActionParser.kt`、`ActionExecutor.kt`、`AppNameMapper.kt`），利用多行字符串、密封类等特性提升可维护性。
+7. **Android 开发环境配置**：
+   - 项目根目录提供 `android_env.cmd` 脚本，统一设置 JAVA_HOME、ANDROID_SDK_ROOT、ANDROID_NDK_ROOT、adb 等环境变量。
+   - 编译前运行 `android_env.cmd` 确保工具链环境正确，避免 Gradle 找不到 JDK 或 SDK 路径。
+   - 构建命令：`gradlew assembleRelease -PKEYPSWD=abc-1234`（使用 Release 构建，密码为 key.jks 文件密码）。
+8. **x86_64 模拟器兼容性（TTS 模块）**：
    - **问题**：x86_64 Android 模拟器上 `std::locale` 初始化会崩溃（SIGABRT: misaligned pointer when deallocating）
    - **影响范围**：所有使用 `std::regex`、`std::stringstream`、`std::wstring_convert`、`std::codecvt` 的代码
    - **解决方案**：TTS 模块（`libs/mnn/apps/frameworks/mnn_tts`）已全面替换为手动实现（无 locale 依赖）
@@ -9904,4 +9916,74 @@ public synchronized boolean initialize(String modelName) {
 
 ---
 
+### I.4 历史记录重复保存问题（2026-01-20）
 
+**问题描述**：
+Agent commit引入后，AI响应的每个词都重复保存，导致 `conversation.md` 文件中出现重复内容。
+
+**问题现象**：
+```markdown
+## AI助手 (2026-01-20 15:57:31)
+
+<debug>
+<debug>
+[LLM] Reusing local model: Qwen3-VL-2B-Instruct-MNN
+[LLM] Reusing local model: Qwen3-VL-2B-Instruct-MNN
+</debug>
+</debug>
+
+HelloHello!! How How can can I I assist assist you you today today??
+
+<performance>
+Model: Qwen3-VL-2B-Instruct-MNN
+...
+</performance>
+
+<performance>
+Model: Qwen3-VL-2B-Instruct-MNN
+...
+</performance>
+```
+
+**根本原因**：
+Agent commit在 `RagQueryManager.java:1342` 新增了重复的追加逻辑：
+
+```java
+// L1342: Agent commit新增的代码（错误）
+fullResponseAccumulator.append(chunk);
+```
+
+但是在 **L686** 的 `onStreamingData()` 回调中已经有追加逻辑了：
+
+```java
+// L686: 原有的追加逻辑（正确）
+fullResponseAccumulator.append(filteredChunk);
+```
+
+**结果**：每个streaming chunk被追加了**两次**，导致所有内容（debug、文本、performance）都重复保存到 `conversation.md`。
+
+**修复方案**：
+删除 `RagQueryManager.java:1342` 的重复追加逻辑：
+
+```java
+// 修复前（错误）
+fullResponseAccumulator.append(chunk);  // 删除这行
+
+// 修复后（正确）
+// Check if Agent should be triggered (detect complete tool_call)
+// NOTE: fullResponseAccumulator is already populated by onStreamingData callback (L686)
+// Do NOT append here to avoid duplicate content
+String fullResponse = fullResponseAccumulator.toString();
+```
+
+**相关文件**：
+- `app/src/main/java/com/example/offlineai/RagQueryManager.java`（修改）
+
+**关键教训**：
+1. **避免重复追加**：同一个数据流不应该在多个地方追加到同一个累加器
+2. **明确数据流向**：`fullResponseAccumulator` 由 `onStreamingData()` 负责追加，其他地方只读取
+3. **代码审查重要性**：新增代码时需要检查是否与现有逻辑冲突
+
+**修复日期**：2026年1月20日
+
+---

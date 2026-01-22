@@ -1028,20 +1028,18 @@ public class RagQaFragment extends Fragment implements StatefulFragment {
                 public void onRequestEndInferenceForeground() {
                     leaveInferenceForegroundSession();
                 }
-
-                @Override
-                public void onAsrStateChanged(boolean isRunning) {
-                    isAsrRunning.set(isRunning);
-                    LogManager.logD(TAG, "[ASR] State changed: isRunning=" + isRunning);
-                }
                 
                 @Override
                 public void onAgentActionDetected(String fullResponse) {
-                    LogManager.logI(TAG, "[AGENT] Agent action detected in callback");
-                    checkAndTriggerAgent(fullResponse);
+                    // Agent loop is now started directly when user sends message in Agent mode
+                    // No need to trigger from streaming output
+                    LogManager.logD(TAG, "[AGENT] onAgentActionDetected called but ignored (using loop mode)");
                 }
-
-                // REMOVED: onRequestCallLlm - LLM calls are now handled directly by RagQueryManager
+                
+                @Override
+                public void onAsrStateChanged(boolean isRunning) {
+                    LogManager.logD(TAG, "[ASR] ASR state changed: " + (isRunning ? "running" : "completed"));
+                }
             });
         
         // Set TtsAdapter to Manager after callback is set (Manager is now initialized)
@@ -1940,28 +1938,58 @@ public class RagQaFragment extends Fragment implements StatefulFragment {
             }
         }
 
-        if (ragQueryManager != null) {
-            RagQueryManager.QueryRequest request = new RagQueryManager.QueryRequest(
-                    apiUrl,
-                    apiKey,
-                    model,
-                    knowledgeBase,
-                    systemPrompt,
-                    userPrompt,
-                    userInput.imagePaths,
-                    userInput.audioPaths,
-                    userInput.audioDuration,
-                    searchDepth,
-                    graphRagEnabled,
-                    needsAsr,
-                    asrModel
-            );
-            LogManager.logI(TAG, "[SEND] Delegating query execution to RagQueryManager.startQuery");
-            ragQueryManager.startQuery(request);
+        // Check if Agent mode is enabled
+        if (isAgentEnabled.get()) {
+            // Agent mode: start autonomous loop execution
+            LogManager.logI(TAG, "[AGENT] Agent mode enabled, starting autonomous loop execution");
+            
+            if (agentManager == null) {
+                LogManager.logE(TAG, "[AGENT] agentManager is null");
+                restoreSendStateAfterValidationFailure("agentManager is null");
+                Toast.makeText(requireContext(), "Agent未初始化", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            
+            if (ragQueryManager == null) {
+                LogManager.logE(TAG, "[AGENT] ragQueryManager is null");
+                restoreSendStateAfterValidationFailure("ragQueryManager is null");
+                Toast.makeText(requireContext(), "RagQueryManager未初始化", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            
+            // Save task goal for Agent
+            lastUserPrompt = userPrompt;
+            
+            // Start Agent loop (will run in background via AgentAccessibilityService)
+            agentManager.startAgentLoop(userPrompt, ragQueryManager);
+            
+            LogManager.logI(TAG, "[AGENT] Agent loop started, task: " + userPrompt);
+            
         } else {
-            LogManager.logE(TAG, "[SEND] ragQueryManager is null, manager-driven pipeline is required; aborting send");
-            restoreSendStateAfterValidationFailure("ragQueryManager is null");
-            return;
+            // Normal mode: standard LLM query
+            if (ragQueryManager != null) {
+                RagQueryManager.QueryRequest request = new RagQueryManager.QueryRequest(
+                        apiUrl,
+                        apiKey,
+                        model,
+                        knowledgeBase,
+                        systemPrompt,
+                        userPrompt,
+                        userInput.imagePaths,
+                        userInput.audioPaths,
+                        userInput.audioDuration,
+                        searchDepth,
+                        graphRagEnabled,
+                        needsAsr,
+                        asrModel
+                );
+                LogManager.logI(TAG, "[SEND] Delegating query execution to RagQueryManager.startQuery");
+                ragQueryManager.startQuery(request);
+            } else {
+                LogManager.logE(TAG, "[SEND] ragQueryManager is null, manager-driven pipeline is required; aborting send");
+                restoreSendStateAfterValidationFailure("ragQueryManager is null");
+                return;
+            }
         }
 
         } else if (isSending.get()) {
@@ -5626,7 +5654,7 @@ private static class UserInput {
      */
     private void initializeAgentManager() {
         try {
-            agentManager = new AgentManager(requireContext());
+            agentManager = AgentManager.getInstance(requireContext());
             LogManager.logI(TAG, "[AGENT] AgentManager initialized");
             
             // Set Agent callback
@@ -5731,50 +5759,19 @@ private static class UserInput {
     }
     
     /**
-     * Check if Agent should be triggered based on model output
-     * Called from streaming callback when detecting <tool_call>
-     */
-    private void checkAndTriggerAgent(String fullResponse) {
-        if (!isAgentEnabled.get()) {
-            return;
-        }
-        
-        if (isAgentExecuting.get()) {
-            LogManager.logD(TAG, "[AGENT] Already executing, skip trigger");
-            return;
-        }
-        
-        if (agentManager == null || !agentManager.containsAgentAction(fullResponse)) {
-            return;
-        }
-        
-        LogManager.logI(TAG, "[AGENT] Detected <tool_call> in model output, triggering Agent");
-        
-        // Get task goal from user prompt
-        String taskGoal = lastUserPrompt != null ? lastUserPrompt : "";
-        
-        // Capture current screenshot (simplified - in real implementation would use MediaProjection)
-        // For now, pass null and Agent will capture when it has MediaProjection initialized
-        android.graphics.Bitmap screenshot = null;
-        
-        // Execute Agent action
-        agentManager.executeFromModelOutput(taskGoal, fullResponse, screenshot);
-    }
-    
-    /**
-     * Add system message to chat (simplified for Agent)
+     * Add system message to chat (for Agent callbacks)
      */
     private void addSystemMessage(String message) {
-        // Simply log for now - Agent messages will be shown in streaming output
         LogManager.logI(TAG, "[AGENT] System message: " + message);
+        // Agent messages are shown via floating window, just log here
     }
     
     /**
-     * Add assistant message to chat (simplified for Agent)
+     * Add assistant message to chat (for Agent callbacks)
      */
     private void addAssistantMessage(String message) {
-        // Simply log for now - Agent answer will be shown in streaming output
         LogManager.logI(TAG, "[AGENT] Assistant message: " + message);
+        // Agent answer will be shown via floating window, just log here
     }
 }  // End of RagQaFragment class
 

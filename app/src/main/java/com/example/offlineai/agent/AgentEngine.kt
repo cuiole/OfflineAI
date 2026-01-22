@@ -28,7 +28,7 @@ class AgentEngine(private val context: Context) {
     
     private val executor = ActionExecutor(context)
     private val memory = TrajectoryMemory(maxHistorySteps = 3)
-    private val screenshotCapture = ScreenshotCapture(context)
+    private var screenshotCapture = ScreenshotCapture(context)
     
     @Volatile
     private var isRunning = false
@@ -54,6 +54,14 @@ class AgentEngine(private val context: Context) {
     
     fun setCallback(callback: AgentCallback?) {
         this.callback = callback
+    }
+    
+    /**
+     * Set ScreenshotCapture instance (for sharing initialized MediaProjection)
+     */
+    fun setScreenshotCapture(capture: ScreenshotCapture) {
+        this.screenshotCapture = capture
+        LogManager.logI(TAG, "ScreenshotCapture instance set")
     }
     
     /**
@@ -155,7 +163,7 @@ class AgentEngine(private val context: Context) {
      */
     suspend fun executeTask(
         taskGoal: String,
-        modelInferenceCallback: suspend (instruction: String, screenshot: Bitmap, history: List<TrajectoryStep>) -> String
+        modelInferenceCallback: suspend (instruction: String, screenshot: Bitmap?, history: List<TrajectoryStep>) -> String
     ) = withContext(Dispatchers.IO) {
         
         if (isRunning) {
@@ -192,11 +200,20 @@ class AgentEngine(private val context: Context) {
                         break
                     }
                     
+                    // First step: skip screenshot for faster inference, only use task instruction
+                    // Screenshot is still captured to verify MediaProjection works
+                    val screenshotForInference = if (stepIndex == 0) {
+                        LogManager.logI(TAG, "Step 0: Skipping screenshot for LLM (using task instruction only for faster inference)")
+                        null
+                    } else {
+                        screenshot
+                    }
+                    
                     // Get model inference
-                    LogManager.logI(TAG, "Step $stepIndex: Requesting model inference...")
+                    LogManager.logI(TAG, "Step $stepIndex: Requesting model inference (screenshot=${screenshotForInference != null})...")
                     val modelOutput = modelInferenceCallback(
                         taskGoal,
-                        screenshot,
+                        screenshotForInference,
                         memory.getRecentSteps()
                     )
                     
